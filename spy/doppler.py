@@ -282,11 +282,50 @@ class DopplerFrame(ASTFrame):
         return self.shift_stmt(init_iter) + self.shift_stmt(while_loop)
 
     def shift_stmt_Raise(self, raise_node: ast.Raise) -> list[ast.Stmt]:
+        if raise_node.exc is None:
+            # bare `raise` is runtime-only; pass through for the C backend
+            return [raise_node]
         self.exec_stmt(raise_node)
         w_opimpl = self.opimpl[raise_node]
         v_exc = self.shifted_expr[raise_node.exc]
         call = self.shift_opimpl(raise_node, w_opimpl, [v_exc])
         return [ast.StmtExpr(raise_node.loc, call)]
+
+    def shift_stmt_Try(self, try_node: ast.Try) -> list[ast.Stmt]:
+        from spy.vm.object import W_Type
+        new_body = self.shift_body(try_node.body)
+        new_handlers = []
+        for handler in try_node.handlers:
+            new_exc_types = []
+            for exc_type in handler.exc_types:
+                self.eval_expr(exc_type)
+                new_exc_types.append(self.shifted_expr[exc_type])
+            if handler.name is not None and new_exc_types:
+                # use the first exc_type to determine the binding variable's type
+                varname = handler.name.value
+                wam_first = self.eval_expr(handler.exc_types[0])
+                w_exc_type = wam_first.w_val
+                assert isinstance(w_exc_type, W_Type)
+                if varname not in self.locals:
+                    self.declare_local(varname, "red", w_exc_type,
+                                       handler.name.loc)
+            new_handler_body = self.shift_body(handler.body)
+            new_handlers.append(handler.replace(exc_types=new_exc_types,
+                                                 body=new_handler_body))
+        new_orelse = self.shift_body(try_node.orelse)
+        new_finalbody = self.shift_body(try_node.finalbody)
+        return [try_node.replace(
+            body=new_body,
+            handlers=new_handlers,
+            orelse=new_orelse,
+            finalbody=new_finalbody,
+        )]
+
+    def shift_stmt_ClassDef(self, classdef: ast.ClassDef) -> list[ast.Stmt]:
+        # Exception class definitions are entirely blue: execute them at
+        # compile time and emit nothing into the redshifted function body.
+        self.exec_stmt_ClassDef(classdef)
+        return []
 
     def shift_stmt_Assert(self, assert_node: ast.Assert) -> list[ast.Stmt]:
         new_test = self.eval_and_shift(assert_node.test, varname="@assert")

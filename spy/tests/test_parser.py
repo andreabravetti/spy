@@ -1210,11 +1210,10 @@ class TestParser:
         def foo() -> None:
             raise
         """
-        self.expect_errors(
-            src,
-            "not implemented yet: bare raise",
-            ("this is not supported", "raise"),
-        )
+        mod = self.parse(src)
+        raise_stmt = mod.get_funcdef("foo").body[0]
+        assert isinstance(raise_stmt, ast.Raise)
+        assert raise_stmt.exc is None
 
     def test_from_import(self):
         mod = self.parse("""
@@ -1394,6 +1393,7 @@ class TestParser:
         ClassDef(
             name='Foo',
             kind='class',
+            bases=[],
             docstring=None,
             body=[
                 Pass(),
@@ -1413,6 +1413,7 @@ class TestParser:
         ClassDef(
             name='Foo',
             kind='struct',
+            bases=[],
             docstring=None,
             body=[
                 Pass(),
@@ -1433,6 +1434,7 @@ class TestParser:
         ClassDef(
             name='Foo',
             kind='class',
+            bases=[],
             docstring='hello',
             body=[
                 VarDef(
@@ -1458,6 +1460,7 @@ class TestParser:
         ClassDef(
             name='Point',
             kind='struct',
+            bases=[],
             docstring=None,
             body=[
                 VarDef(
@@ -1488,6 +1491,7 @@ class TestParser:
         ClassDef(
             name='Foo',
             kind='class',
+            bases=[],
             docstring=None,
             body=[
                 VarDef(
@@ -1519,6 +1523,7 @@ class TestParser:
         ClassDef(
             name='Foo',
             kind='struct',
+            bases=[],
             docstring=None,
             body=[
                 VarDef(

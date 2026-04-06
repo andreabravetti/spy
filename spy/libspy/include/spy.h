@@ -39,6 +39,7 @@
 #endif
 
 #include "spy/__spy__.h"
+#include "spy/exc.h"
 #include "spy/builtins.h"
 #include "spy/complex.h"
 #include "spy/debug.h"

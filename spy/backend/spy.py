@@ -202,11 +202,16 @@ class SPyBackend:
         self.scope_stack.pop()
 
     def emit_stmt_ClassDef(self, classdef: ast.ClassDef) -> None:
-        assert classdef.kind == "struct", "IMPLEMENT ME"
         name = classdef.name
         self.scope_stack.append(classdef.symtable)
-        self.wl("@struct")
-        self.wl(f"class {name}:")
+        if classdef.kind == "struct":
+            self.wl("@struct")
+            self.wl(f"class {name}:")
+        elif classdef.kind == "exception":
+            assert classdef.bases
+            self.wl(f"class {name}({classdef.bases[0]}):")
+        else:
+            assert False, f"IMPLEMENT ME: ClassDef kind {classdef.kind!r}"
         with self.out.indent():
             for stmt in classdef.body:
                 self.emit_stmt(stmt)
@@ -314,8 +319,43 @@ class SPyBackend:
                     self.emit_stmt(stmt)
 
     def emit_stmt_Raise(self, raise_node: ast.Raise) -> None:
-        exc = self.fmt_expr(raise_node.exc)
-        self.wl(f"raise {exc}")
+        if raise_node.exc is None:
+            self.wl("raise")
+        else:
+            exc = self.fmt_expr(raise_node.exc)
+            self.wl(f"raise {exc}")
+
+    def emit_stmt_Try(self, try_node: ast.Try) -> None:
+        self.wl("try:")
+        with self.out.indent():
+            for stmt in try_node.body:
+                self.emit_stmt(stmt)
+        for handler in try_node.handlers:
+            if handler.exc_types:
+                if len(handler.exc_types) == 1:
+                    exc_type = self.fmt_expr(handler.exc_types[0])
+                else:
+                    parts = ", ".join(self.fmt_expr(t) for t in handler.exc_types)
+                    exc_type = f"({parts})"
+                if handler.name is not None:
+                    self.wl(f"except {exc_type} as {handler.name.value}:")
+                else:
+                    self.wl(f"except {exc_type}:")
+            else:
+                self.wl("except:")
+            with self.out.indent():
+                for stmt in handler.body:
+                    self.emit_stmt(stmt)
+        if try_node.orelse:
+            self.wl("else:")
+            with self.out.indent():
+                for stmt in try_node.orelse:
+                    self.emit_stmt(stmt)
+        if try_node.finalbody:
+            self.wl("finally:")
+            with self.out.indent():
+                for stmt in try_node.finalbody:
+                    self.emit_stmt(stmt)
 
     def emit_stmt_Assert(self, assert_node: ast.Assert) -> None:
         test = self.fmt_expr(assert_node.test)

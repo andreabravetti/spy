@@ -442,6 +442,26 @@ class ScopeAnalyzer:
             self.declare(stmt)
         self.loop_depth -= 1
 
+    def declare_Try(self, trystmt: ast.Try) -> None:
+        for stmt in trystmt.body:
+            self.declare(stmt)
+        for handler in trystmt.handlers:
+            self.declare(handler)
+        for stmt in trystmt.orelse:
+            self.declare(stmt)
+        for stmt in trystmt.finalbody:
+            self.declare(stmt)
+
+    def declare_ExceptHandler(self, handler: ast.ExceptHandler) -> None:
+        if handler.name is not None:
+            varname = handler.name.value
+            type_loc = (handler.exc_types[0].loc
+                        if handler.exc_types
+                        else handler.loc)
+            self.define_name(varname, "var", "auto", handler.name.loc, type_loc)
+        for stmt in handler.body:
+            self.declare(stmt)
+
     # ===
 
     def capture_maybe(self, varname: str) -> None:
@@ -556,6 +576,24 @@ class ScopeAnalyzer:
         for target in unpack.targets:
             self.flatten(target)
         self.flatten(unpack.value)
+
+    def flatten_Try(self, trystmt: ast.Try) -> None:
+        for stmt in trystmt.body:
+            self.flatten(stmt)
+        for handler in trystmt.handlers:
+            self.flatten(handler)
+        for stmt in trystmt.orelse:
+            self.flatten(stmt)
+        for stmt in trystmt.finalbody:
+            self.flatten(stmt)
+
+    def flatten_ExceptHandler(self, handler: ast.ExceptHandler) -> None:
+        for exc_type in handler.exc_types:
+            self.flatten(exc_type)
+        if handler.name is not None:
+            self.capture_maybe(handler.name.value)
+        for stmt in handler.body:
+            self.flatten(stmt)
 
     def flatten_Dict(self, dict: ast.Dict) -> None:
         self.mod_scope.implicit_imports.add("_dict")

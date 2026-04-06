@@ -141,9 +141,33 @@ class Context:
         self._d[JSFFI.w_JsRef] = C_Type("JsRef")
         self._d[POSIX.w__FILE] = C_Type("FILE *")
 
+    # Mapping from C value-type name to spy_Result_T suffix.
+    # Used by w2c_result() and result_suffix().
+    _RESULT_SUFFIX: dict[str, str] = {
+        "void":          "void",
+        "int8_t":        "i8",
+        "uint8_t":       "u8",
+        "int32_t":       "i32",
+        "uint32_t":      "u32",
+        "double":        "f64",
+        "float":         "f32",
+        "bool":          "bool",
+        "spy_Str *":       "str",
+        "spy_Exc *":       "ptr",
+        "spy_Complex128":  "complex128",
+        "spy_RawBuffer *": "ptr",
+    }
+
     def w2c(self, w_T: W_Type) -> C_Type:
+        from spy.vm.exc import W_Exception
         if w_T in self._d:
             return self._d[w_T]
+
+        elif isinstance(w_T, W_Type) and issubclass(w_T.pyclass, W_Exception):
+            # Exception instances captured via `except X as e` are spy_Exc *
+            c_type = C_Type("spy_Exc *")
+            self._d[w_T] = c_type
+            return c_type
 
         elif isinstance(w_T, W_Type):
             # as soon as we split spy_structdefs into multiple files, here we
@@ -155,7 +179,29 @@ class Context:
 
         raise NotImplementedError(f"Cannot translate type {w_T} to C")
 
+    def result_suffix(self, w_T: W_Type) -> str:
+        """
+        Return the suffix used in SPY_OK_<suffix> / SPY_ERR_<suffix> macros
+        for the given SPy type.  For struct types not in _RESULT_SUFFIX the
+        suffix is derived from the C type name so it matches the typedef that
+        CModuleWriter emits in the module header.
+        """
+        c_name = self.w2c(w_T).name
+        suffix = self._RESULT_SUFFIX.get(c_name)
+        if suffix is not None:
+            return suffix
+        # struct / user-defined type: suffix == c_name with spaces/stars replaced
+        return c_name.replace(" ", "_").replace("*", "ptr")
+
+    def w2c_result(self, w_T: W_Type) -> C_Type:
+        """
+        Return the spy_Result_T type for a given SPy return type.
+        E.g. w_i32 -> spy_Result_i32, w_NoneType -> spy_Result_void.
+        """
+        return C_Type(f"spy_Result_{self.result_suffix(w_T)}")
+
     def c_restype_by_fqn(self, fqn: FQN) -> C_Type:
+        """Return the raw C value type for a function's return type (not the Result wrapper)."""
         w_func = self.vm.lookup_global(fqn)
         assert isinstance(w_func, W_Func)
         w_restype = w_func.w_functype.w_restype
@@ -182,7 +228,8 @@ class Context:
             else:
                 assert False
 
-        c_restype = self.w2c(w_functype.w_restype)
+        # Go-style: every function returns spy_Result_T instead of T
+        c_restype = self.w2c_result(w_functype.w_restype)
         return C_Function(name, c_params, c_restype)
 
     def add_include_maybe(self, fqn: FQN) -> None:

@@ -130,7 +130,10 @@ class WasmFuncWrapper:
         if w_T is TYPES.w_NoneType:
             assert res is None
             return None
-        elif w_T in (B.w_i8, B.w_u8, B.w_i32, B.w_u32, B.w_f64, B.w_f32):
+        elif w_T is B.w_i8:
+            # WASM zero-extends int8_t to i32 in multivalue returns; sign-extend it.
+            return ((res & 0xFF) ^ 0x80) - 0x80
+        elif w_T in (B.w_u8, B.w_i32, B.w_u32, B.w_f64, B.w_f32):
             return res
         elif w_T is B.w_complex128:
             real, imag = res
@@ -249,7 +252,77 @@ class WasmFuncWrapper:
         wasm_args = self.from_py_args(py_args)
         res = self.ll.call(self.c_name, *wasm_args)
         w_T = self.w_functype.w_restype
-        return self.to_py_result(w_T, res)
+        return self._unwrap_spy_result(w_T, res)
+
+    def _unwrap_spy_result(self, w_T: W_Type, res: Any) -> Any:
+        """
+        Every SPy function now returns spy_Result_T = {value, err}.
+        In WASM multi-value ABI this is flattened: [...value_fields, err_ptr].
+
+        For NoneType (spy_Result_void = {spy_Exc *err}):
+            res is a single integer (the err pointer).
+        For all other types:
+            res is a list where res[-1] is the err pointer.
+        """
+        from spy.errors import SPyError
+        if w_T is TYPES.w_NoneType:
+            # spy_Result_void = {spy_Exc *err} -> 1 field -> single int
+            err_ptr = res
+            if err_ptr:
+                self._raise_spy_exc(err_ptr)
+            return None
+        else:
+            # spy_Result_T = {T value, spy_Exc *err} -> list
+            assert isinstance(res, list), (
+                f"Expected multi-value list for {w_T}, got {res!r}"
+            )
+            err_ptr = res[-1]
+            if err_ptr:
+                self._raise_spy_exc(err_ptr)
+            value_fields = res[:-1]
+            raw = value_fields[0] if len(value_fields) == 1 else value_fields
+            return self.to_py_result(w_T, raw)
+
+    def _raise_spy_exc(self, err_ptr: int) -> None:
+        """Read a spy_Exc from WASM memory and raise it as a Python SPyError."""
+        from spy.errors import SPyError
+        from spy.vm.exc import FrameInfo, FrameInfoC, W_Traceback
+        # spy_Exc layout (WASM32):
+        #   offset 0: const char * const *etype_chain  (i32 ptr)
+        #   offset 4: const char *message              (i32 ptr)
+        #   offset 8: spy_FrameEntry *frames           (i32 ptr)
+        chain_ptr = self.ll.mem.read_i32(err_ptr + 0)
+        msg_ptr = self.ll.mem.read_i32(err_ptr + 4)
+        frames_ptr = self.ll.mem.read_i32(err_ptr + 8)
+        # Read the first (most-specific) type name from the chain
+        first_type_ptr = self.ll.mem.read_i32(chain_ptr + 0)
+        etype_str = self.ll.mem.read_cstr(first_type_ptr).decode("utf-8")
+        msg_str = self.ll.mem.read_cstr(msg_ptr).decode("utf-8")
+        from spy.vm.exc import W_Exception
+        w_type = self.vm.lookup_exc_type(etype_str)
+        if w_type is not None:
+            exc_pyclass: type[W_Exception] = w_type.pyclass  # type: ignore[assignment]
+            err = SPyError.from_w_exc(exc_pyclass(msg_str))
+        else:
+            err = SPyError("W_Exception", f"{etype_str}: {msg_str}")
+        # Decode the linked-list frame entries and attach as a W_Traceback.
+        # spy_FrameEntry layout (WASM32):
+        #   offset 0: const char *fqn      (i32 ptr)
+        #   offset 4: const char *loc_src  (i32 ptr)
+        #   offset 8: spy_FrameEntry *next (i32 ptr)
+        entries: list[FrameInfo] = []
+        cur = frames_ptr
+        while cur:
+            fqn_ptr = self.ll.mem.read_i32(cur + 0)
+            src_ptr = self.ll.mem.read_i32(cur + 4)
+            nxt = self.ll.mem.read_i32(cur + 8)
+            fqn_str = self.ll.mem.read_cstr(fqn_ptr).decode("utf-8")
+            src_str = self.ll.mem.read_cstr(src_ptr).decode("utf-8")
+            entries.append(FrameInfoC(fqn_str, src_str))
+            cur = nxt
+        if entries:
+            err.w_exc.w_tb = W_Traceback(entries)
+        raise err
 
 
 def unflatten_struct(

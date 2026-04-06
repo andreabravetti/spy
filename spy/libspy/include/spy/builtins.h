@@ -53,4 +53,7 @@ spy_builtins$hash_bool(bool x) {
 // wastime, see e.g. test_basic.test_print
 void WASM_EXPORT(spy_flush)(void);
 
+// Exception .message property: returns the exception message as a spy_Str*.
+spy_Str *spy_builtins$Exception$message(const spy_Exc *exc);
+
 #endif /* SPY_BUILTINS_H */

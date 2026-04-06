@@ -10,7 +10,7 @@ from spy.errfmt import Annotation, ErrorFormatter, Level
 from spy.fqn import FQN
 from spy.location import Loc
 from spy.vm.b import BUILTINS, TYPES
-from spy.vm.builtin import builtin_method
+from spy.vm.builtin import builtin_method, builtin_property
 from spy.vm.object import W_Object, W_Type
 from spy.vm.opspec import W_MetaArg, W_OpSpec
 from spy.vm.primitive import W_Bool
@@ -18,6 +18,7 @@ from spy.vm.str import W_Str
 
 if TYPE_CHECKING:
     from spy.vm.astframe import AbstractFrame
+    from spy.vm.object import ClassBody
     from spy.vm.vm import SPyVM
 
 FrameKind = Literal["astframe", "modframe", "classframe", "dopplerframe"]
@@ -37,6 +38,42 @@ class FrameInfo:
     @property
     def fqn(self) -> FQN:
         return self.spyframe.ns
+
+
+class _StrLoc:
+    """Loc-like object backed by a plain string, used for C-generated frame entries.
+
+    Provides a minimal interface compatible with errfmt and MatchFrame comparison.
+    """
+    filename = "<C>"
+    line_start = 0
+    line_end = 0
+    col_start = 0
+    col_end = 0
+
+    def __init__(self, src: str) -> None:
+        self._src = src
+
+    def get_src(self) -> str:
+        return self._src
+
+
+class FrameInfoC(FrameInfo):
+    """FrameInfo synthesized from C-provided frame data (no AbstractFrame)."""
+
+    def __init__(self, fqn_str: str, loc_src: str) -> None:
+        # Intentionally bypass FrameInfo.__init__ — no AbstractFrame available.
+        self._fqn = FQN(fqn_str)
+        self.loc = _StrLoc(loc_src)  # type: ignore[assignment]
+        self.spyframe = None  # type: ignore[assignment]
+
+    @property
+    def kind(self) -> FrameKind:
+        return "astframe"
+
+    @property
+    def fqn(self) -> FQN:
+        return self._fqn
 
 
 @TYPES.builtin_type("TracebackType")
@@ -179,6 +216,11 @@ class W_Exception(W_Object):
         return f"{cls}({self.message!r})"
 
     # app-level interface
+
+    @builtin_property("message")
+    @staticmethod
+    def w_get_message(vm: "SPyVM", w_self: "W_Exception") -> W_Str:
+        return vm.wrap(w_self.message)
 
     @builtin_method("__new__", color="blue", kind="metafunc")
     @staticmethod
@@ -338,3 +380,70 @@ class W_SPdbQuit(W_Exception):
     """
     Raised when doing 'quit' from (spdb) prompt
     """
+
+
+@TYPES.builtin_type("ExceptionType")
+class W_ExceptionType(W_Type):
+    """
+    Metaclass for user-defined SPy exception classes.
+
+    When the user writes:
+        class MyError(ValueError): pass
+
+    this creates a W_ExceptionType instance whose w_base points to the
+    W_Type for ValueError.  At define time we dynamically create a Python
+    subclass of the base's pyclass so that isinstance checks and the MRO
+    chain work correctly.
+    """
+
+    _exc_base: W_Type  # the base exception W_Type
+
+    @classmethod
+    def declare(cls, fqn: FQN, w_base: W_Type) -> "W_ExceptionType":  # type: ignore[override]
+        w_T: W_ExceptionType = super().declare(fqn)  # type: ignore[assignment]
+        w_T._exc_base = w_base
+        return w_T
+
+    def define_from_classbody(self, vm: "SPyVM", body: "ClassBody") -> None:
+        # Only `pass` is allowed in exception class bodies for now.
+        base_pyclass = self._exc_base.pyclass
+        assert issubclass(base_pyclass, W_Exception)
+        # Create a real Python subclass so isinstance() works at interp level.
+        pyclass = type(self.fqn.symbol_name, (base_pyclass,), {})
+        self.define(pyclass)
+        # Set _w so that spy_get_w_type works on instances (analogous to @builtin_type).
+        pyclass._w = self  # type: ignore[attr-defined]
+
+    def mro_names(self) -> list[str]:
+        """
+        Return the ordered list of exception type names for etype_chain,
+        from most-specific to most-general, stopping at (and including) Exception.
+        """
+        names: list[str] = []
+        w_T: W_Type = self
+        while isinstance(w_T, W_ExceptionType):
+            names.append(w_T.fqn.symbol_name)
+            w_T = w_T._exc_base
+        # w_T is now a built-in W_Type — delegate to exc_mro_names for the rest
+        names.extend(exc_mro_names(w_T))
+        return names
+
+
+def exc_mro_names(w_type: W_Type) -> list[str]:
+    """
+    Return the MRO name chain for an exception W_Type (most-specific first),
+    for use in spy_Exc.etype_chain. Works for both user-defined (W_ExceptionType)
+    and built-in exception types. Uses fqn.symbol_name throughout.
+    """
+    if isinstance(w_type, W_ExceptionType):
+        return w_type.mro_names()
+    # Built-in W_Type: walk the Python class hierarchy using fqn.symbol_name.
+    cls = w_type.pyclass
+    names: list[str] = []
+    while issubclass(cls, W_Exception):
+        names.append(cls._w.fqn.symbol_name)  # type: ignore[attr-defined]
+        parent = cls.__mro__[1]
+        if not (isinstance(parent, type) and issubclass(parent, W_Exception)):
+            break
+        cls = parent
+    return names

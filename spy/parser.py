@@ -333,12 +333,15 @@ class Parser:
         )
 
     def from_py_stmt_ClassDef(self, py_classdef: py_ast.ClassDef) -> spy.ast.ClassDef:
-        if py_classdef.bases:
-            self.error(
-                "base classes not supported yet",
-                "this is not supported",
-                py_classdef.bases[0].loc,
-            )
+        bases: list[str] = []
+        for py_base in py_classdef.bases:
+            if not isinstance(py_base, py_ast.Name):
+                self.error(
+                    "base class must be a simple name",
+                    "this is not supported",
+                    py_base.loc,
+                )
+            bases.append(py_base.id)
 
         if py_classdef.keywords:
             self.error(
@@ -363,6 +366,8 @@ class Parser:
         kind: spy.ast.ClassKind
         if struct_loc:
             kind = "struct"
+        elif bases:
+            kind = "exception"
         else:
             kind = "class"
 
@@ -385,6 +390,7 @@ class Parser:
             body_loc=body_loc,
             name=py_classdef.name,
             kind=kind,
+            bases=bases,
             body=body,
             docstring=docstring,
         )
@@ -608,12 +614,25 @@ class Parser:
     def from_py_stmt_Raise(self, py_node: py_ast.Raise) -> spy.ast.Raise:
         if py_node.cause:
             self.unsupported(py_node, "raise ... from ...")
-
-        if py_node.exc is None:
-            self.unsupported(py_node, "bare raise")
-
-        exc = self.from_py_expr(py_node.exc)
+        exc = None if py_node.exc is None else self.from_py_expr(py_node.exc)
         return spy.ast.Raise(loc=py_node.loc, exc=exc)
+
+    def from_py_stmt_Try(self, py_node: py_ast.Try) -> spy.ast.Try:
+        body = self.from_py_body(py_node.body)
+        handlers = []
+        for h in py_node.handlers:
+            if h.type is None:
+                exc_types: list[spy.ast.Expr] = []
+            elif isinstance(h.type, py_ast.Tuple):
+                exc_types = [self.from_py_expr(elt) for elt in h.type.elts]
+            else:
+                exc_types = [self.from_py_expr(h.type)]
+            name = spy.ast.StrConst(h.loc, h.name) if h.name is not None else None
+            handler_body = self.from_py_body(h.body)
+            handlers.append(spy.ast.ExceptHandler(h.loc, exc_types, name, handler_body))
+        orelse = self.from_py_body(py_node.orelse)
+        finalbody = self.from_py_body(py_node.finalbody)
+        return spy.ast.Try(py_node.loc, body, handlers, orelse, finalbody)
 
     def from_py_stmt_Assert(self, py_node: py_ast.Assert) -> spy.ast.Assert:
         test = self.from_py_expr(py_node.test)

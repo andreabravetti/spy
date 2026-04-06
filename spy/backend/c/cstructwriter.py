@@ -9,6 +9,7 @@ from spy.fqn import FQN
 from spy.textbuilder import TextBuilder
 from spy.vm.modules.unsafe.ptr import W_PtrType, W_RefType
 from spy.vm.object import W_Type
+from spy.vm.exc import W_ExceptionType
 from spy.vm.struct import W_StructType
 from spy.vm.vm import SPyVM
 
@@ -96,7 +97,9 @@ class CStructWriter:
     def emit_content(self) -> None:
         for fqn, w_type in self.c_structdefs.content:
             assert fqn == w_type.fqn  # sanity check
-            if isinstance(w_type, W_StructType):
+            if isinstance(w_type, W_ExceptionType):
+                pass  # exception types need no C struct definition
+            elif isinstance(w_type, W_StructType):
                 self.emit_StructType(fqn, w_type)
             elif isinstance(w_type, W_PtrType):
                 self.emit_PtrType(fqn, w_type)
@@ -137,6 +140,9 @@ class CStructWriter:
                 c_fieldtype = self.ctx.w2c(w_field.w_T)
                 tb.wl(f"{c_fieldtype} {w_field.name};")
         tb.wl("};")
+        # Emit the spy_Result_T typedef so struct-returning functions can use it.
+        suffix = self.ctx.result_suffix(w_st)
+        tb.wl(f"SPY_DEFINE_RESULT({c_st}, {suffix})")
         tb.wl("")
 
     def emit_PtrType(self, fqn: FQN, w_ptrtype: W_PtrType) -> None:
@@ -154,9 +160,11 @@ class CStructWriter:
         self.tbh_fwdecl.wl()
 
         memkind = w_ptrtype.memkind
+        suffix = self.ctx.result_suffix(w_ptrtype)
         self.tbh_ptrs_def.wb(f"""
         SPY_PTR_FUNCTIONS({memkind}, {c_ptrtype}, {c_itemT});
         #define {c_ptrtype}$NULL (({c_ptrtype}){{0}})
+        SPY_DEFINE_RESULT({c_ptrtype}, {suffix})
         """)
         self.tbh_ptrs_def.wl()
 
@@ -169,9 +177,11 @@ class CStructWriter:
         typedef {c_ptrtype} {c_reftype};
         """)
 
+        suffix = self.ctx.result_suffix(w_reftype)
         self.tbh_ptrs_def.wb(f"""
         #define {c_reftype}_from_addr {c_ptrtype}_from_addr
         #define {c_reftype}$deref {c_ptrtype}$deref
         #define {c_reftype}$__eq__ {c_ptrtype}$__eq__
         #define {c_reftype}$__ne__ {c_ptrtype}$__ne__
+        SPY_DEFINE_RESULT({c_reftype}, {suffix})
         """)

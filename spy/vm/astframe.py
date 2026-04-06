@@ -21,6 +21,7 @@ from spy.vm.object import W_Object, W_Type
 from spy.vm.opimpl import W_OpImpl
 from spy.vm.opspec import W_MetaArg
 from spy.vm.primitive import W_Bool
+from spy.vm.exc import W_Exception, W_ExceptionType
 from spy.vm.struct import W_StructType
 from spy.vm.typechecker import maybe_plural
 
@@ -96,6 +97,7 @@ class AbstractFrame:
         self.specialized_assigns = {}
         self.specialized_assignexprs = {}
         self.desugared_fors = {}
+        self._active_exc_stack: list[SPyError] = []
 
     # overridden by DopplerFrame
     @property
@@ -400,8 +402,10 @@ class AbstractFrame:
     def metaclass_for_classdef(classdef: ast.ClassDef) -> type[W_Type]:
         if classdef.kind == "struct":
             return W_StructType
+        elif classdef.kind == "exception":
+            return W_ExceptionType
         else:
-            assert False, "only @struct and @typedef are supported for now"
+            assert False, "only @struct and exception classes are supported for now"
 
     def fwdecl_ClassDef(self, classdef: ast.ClassDef) -> None:
         """
@@ -409,12 +413,40 @@ class AbstractFrame:
         """
         fqn = self.ns.join(classdef.name)
         fqn = self.vm.get_unique_FQN(fqn)
-        pyclass = self.metaclass_for_classdef(classdef)
-        w_typedecl = pyclass.declare(fqn)
+        w_typedecl: W_Type
+        if classdef.kind == "exception":
+            assert classdef.bases, "exception class must have a base class"
+            w_base = self._lookup_exc_base(classdef.bases[0], classdef.loc)
+            w_typedecl = W_ExceptionType.declare(fqn, w_base)
+        else:
+            metacls = self.metaclass_for_classdef(classdef)
+            w_typedecl = metacls.declare(fqn)
         w_meta_type = self.vm.dynamic_type(w_typedecl)
         self.declare_local(classdef.name, "blue", w_meta_type, classdef.loc)
         self.store_local(classdef.name, w_typedecl)
         self.vm.add_global(fqn, w_typedecl)
+
+    def _lookup_exc_base(self, base_name: str, loc: Loc) -> W_Type:
+        """
+        Look up a base exception type by its simple name.
+
+        Called at fwdecl time when imports may not have been processed yet,
+        so we search directly in VM globals (which always include builtins).
+        """
+        for fqn, w_obj in self.vm.globals_w.items():
+            if fqn.symbol_name != base_name:
+                continue
+            if isinstance(w_obj, W_ExceptionType):
+                return w_obj
+            if (isinstance(w_obj, W_Type) and w_obj.is_defined()
+                    and issubclass(w_obj.pyclass, W_Exception)):
+                return w_obj
+        raise SPyError.simple(
+            "W_TypeError",
+            f"unknown exception base class: `{base_name}`",
+            "this is not a known exception type",
+            loc,
+        )
 
     def exec_stmt_ClassDef(self, classdef: ast.ClassDef) -> None:
         from spy.vm.classframe import ClassFrame
@@ -787,7 +819,54 @@ class AbstractFrame:
         )
         return init_iter, while_loop
 
+    def exec_stmt_Try(self, try_node: ast.Try) -> None:
+        try:
+            for stmt in try_node.body:
+                self.exec_stmt(stmt)
+        except SPyError as err:
+            for handler in try_node.handlers:
+                if self._try_match_handler(err, handler):
+                    if handler.name is not None:
+                        self._bind_exception_var(handler.name, err)
+                    self._active_exc_stack.append(err)
+                    try:
+                        for stmt in handler.body:
+                            self.exec_stmt(stmt)
+                    finally:
+                        self._active_exc_stack.pop()
+                    break
+            else:
+                raise
+        else:
+            for stmt in try_node.orelse:
+                self.exec_stmt(stmt)
+        finally:
+            for stmt in try_node.finalbody:
+                self.exec_stmt(stmt)
+
+    def _try_match_handler(
+        self, err: SPyError, handler: ast.ExceptHandler
+    ) -> bool:
+        if not handler.exc_types:
+            return True  # bare `except:`
+        for exc_type in handler.exc_types:
+            w_val = self.eval_expr(exc_type).w_val
+            assert isinstance(w_val, W_Type)
+            if isinstance(err.w_exc, w_val.pyclass):
+                return True
+        return False
+
+    def _bind_exception_var(self, name: ast.StrConst, err: SPyError) -> None:
+        varname = name.value
+        w_exc_type = self.vm.dynamic_type(err.w_exc)
+        if varname not in self.locals:
+            self.declare_local(varname, "red", w_exc_type, name.loc)
+        self.store_local(varname, err.w_exc)
+
     def exec_stmt_Raise(self, raise_node: ast.Raise) -> None:
+        if raise_node.exc is None:
+            assert self._active_exc_stack, "bare `raise` outside an except handler"
+            raise self._active_exc_stack[-1]
         wam_exc = self.eval_expr(raise_node.exc)
         w_opimpl = self.vm.call_OP(raise_node.loc, OP.w_RAISE, [wam_exc])
         self.eval_opimpl(raise_node, w_opimpl, [wam_exc])

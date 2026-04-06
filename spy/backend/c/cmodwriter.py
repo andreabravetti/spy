@@ -12,6 +12,7 @@ from spy.fqn import FQN
 from spy.textbuilder import TextBuilder
 from spy.vm.b import B
 from spy.vm.cell import W_Cell
+from spy.vm.exc import W_Exception
 from spy.vm.function import W_ASTFunc, W_BuiltinFunc
 from spy.vm.module import W_Module
 from spy.vm.modules.unsafe.ptr import W_Ptr, W_PtrType
@@ -52,6 +53,10 @@ class CModuleWriter:
     tbc_funcs: TextBuilder  # functions
     tbc_globals: TextBuilder  # global var definition (.c)
 
+    # caches used by CFuncWriter helpers (one per module)
+    _exc_chain_cache: dict[tuple[str, ...], str]
+    _emitted_exc_consts: set[str]
+
     def __init__(
         self,
         vm: SPyVM,
@@ -67,6 +72,8 @@ class CModuleWriter:
         self.tbc = TextBuilder(use_colors=False)
         # nested builders are initialized lazily
         self.global_vars = set()
+        self._exc_chain_cache = {}
+        self._emitted_exc_consts = set()
         self.init_h()
         self.init_c()
 
@@ -169,13 +176,13 @@ class CModuleWriter:
                     #define spy_list_str_push spy__list$list__builtins$str$_ListImpl$_push
 
                     spy_list_str spy_wrap_argv(int argc, const char *argv[]) {
-                        spy_list_str lst = spy_list_str_new();
+                        spy_list_str lst = spy_list_str_new().value;
                         for (int i = 0; i < argc; i++) {
                             size_t length = strlen(argv[i]);
                             spy_Str *s = spy_str_alloc(length);
                             char *buf = (char *)s->utf8;
                             memcpy(buf, argv[i], length);
-                            lst = spy_list_str_push(lst, s);
+                            lst = spy_list_str_push(lst, s).value;
                         }
                         return lst;
                     }
@@ -187,29 +194,36 @@ class CModuleWriter:
                     /* end of helper code */
                 """)
 
+            c_result_type = self.ctx.w2c_result(w_restype)
             if has_argv and returns_i32:
                 main_src = f"""
                     int main(int argc, const char *argv[]) {{
-                        return {fqn_main.c_name}(spy_wrap_argv(argc, argv));
+                        {c_result_type} r = {fqn_main.c_name}(spy_wrap_argv(argc, argv));
+                        if (r.err) {{ spy_exc_print(r.err); return 1; }}
+                        return r.value;
                     }}
                     """
             elif has_argv and not returns_i32:
                 main_src = f"""
                     int main(int argc, const char *argv[]) {{
-                        {fqn_main.c_name}(spy_wrap_argv(argc, argv));
+                        {c_result_type} r = {fqn_main.c_name}(spy_wrap_argv(argc, argv));
+                        if (r.err) {{ spy_exc_print(r.err); return 1; }}
                         return 0;
                     }}
                     """
             elif not has_argv and returns_i32:
                 main_src = f"""
                     int main(void) {{
-                        return {fqn_main.c_name}();
+                        {c_result_type} r = {fqn_main.c_name}();
+                        if (r.err) {{ spy_exc_print(r.err); return 1; }}
+                        return r.value;
                     }}
                     """
             else:
                 main_src = f"""
                     int main(void) {{
-                        {fqn_main.c_name}();
+                        {c_result_type} r = {fqn_main.c_name}();
+                        if (r.err) {{ spy_exc_print(r.err); return 1; }}
                         return 0;
                     }}
                     """
@@ -268,6 +282,11 @@ class CModuleWriter:
             c_type = self.ctx.w2c(w_T)
             self.tbh_globals.wl(f"extern {c_type} {fqn.c_name};")
             self.tbc_globals.wl(f"{c_type} {fqn.c_name} = {{0}};")
+
+        elif isinstance(w_obj, W_Exception):
+            # prebuilt exception constants — emitted inline by _fmt_exc_const,
+            # so nothing to do here
+            pass
 
         else:
             raise NotImplementedError("WIP")

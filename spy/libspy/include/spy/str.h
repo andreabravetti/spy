@@ -11,6 +11,10 @@ typedef struct {
     const char utf8[];
 } spy_Str;
 
+// Go-style result type for functions returning spy_Str *.
+// Defined here because spy_Str is defined in this file.
+SPY_DEFINE_RESULT(spy_Str *, str)
+
 spy_Str *WASM_EXPORT(spy_str_alloc)(size_t length);
 
 spy_Str *WASM_EXPORT(spy_str_add)(spy_Str *a, spy_Str *b);

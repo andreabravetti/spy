@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from spy.vm.object import W_Type
     from spy.vm.vm import SPyVM
 
-ClassKind = typing.Literal["class", "struct"]
+ClassKind = typing.Literal["class", "struct", "exception"]
 FuncKind = typing.Literal["plain", "generic", "metafunc"]
 FuncParamKind = typing.Literal["simple", "var_positional"]
 
@@ -584,8 +584,9 @@ class ClassDef(Stmt):
     body_loc: Loc
     name: str
     kind: ClassKind
-    docstring: Optional[str]
-    body: list["Stmt"]
+    bases: list[str] = field(default_factory=list)
+    docstring: Optional[str] = None
+    body: list["Stmt"] = field(default_factory=list)
     symtable: Any = field(repr=False, default=None)
 
     def shortrepr(self) -> Optional[str]:
@@ -682,7 +683,22 @@ class For(Stmt):
 
 @astnode
 class Raise(Stmt):
-    exc: Expr
+    exc: Optional[Expr]  # None means bare `raise` (re-raise current exception)
+
+
+@astnode
+class ExceptHandler(Node):
+    exc_types: list[Expr]  # empty list means bare `except:`
+    name: Optional["StrConst"]  # the `as e` part, if present
+    body: list[Stmt]
+
+
+@astnode
+class Try(Stmt):
+    body: list[Stmt]
+    handlers: list[ExceptHandler]
+    orelse: list[Stmt]
+    finalbody: list[Stmt]
 
 
 @astnode

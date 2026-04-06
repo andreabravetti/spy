@@ -290,6 +290,23 @@ class SPyVM:
             raise Exception(f"lookup_global failed: {fqn}")
         return w_val
 
+    def lookup_exc_type(self, name: str) -> Optional["W_Type"]:
+        """
+        Look up an exception W_Type by its SPy name (e.g. 'ValueError', 'MyError').
+        Handles both built-in types (registered in spy.vm.exc) and user-defined types.
+        """
+        from spy.vm.exc import W_Exception, W_ExceptionType
+        import spy.vm.exc as exc_mod
+        pyclass = getattr(exc_mod, "W_" + name, None)
+        if (pyclass is not None
+                and isinstance(pyclass, type)
+                and issubclass(pyclass, W_Exception)):
+            return pyclass._w  # type: ignore[attr-defined]
+        for fqn, w_obj in self.globals_w.items():
+            if isinstance(w_obj, W_ExceptionType) and fqn.symbol_name == name:
+                return w_obj
+        return None
+
     def get_irtag(self, fqn: FQN) -> IRTag:
         return self.irtags.get(fqn, IRTag.Empty)
 

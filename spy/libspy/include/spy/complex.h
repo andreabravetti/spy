@@ -14,6 +14,8 @@ typedef struct {
     double imag;
 } spy_Complex128;
 
+SPY_DEFINE_RESULT(spy_Complex128, complex128)
+
 #define spy_builtins$complex128$__get_real__ spy_complex128_get_real
 #define spy_builtins$complex128$__get_imag__ spy_complex128_get_imag
 #define spy_builtins$complex128$conjugate spy_complex128_conjugate
