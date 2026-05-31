@@ -1,0 +1,38 @@
+from _range import range
+
+
+def mandelbrot(width: i32, height: i32, max_iter: i32) -> i32:
+    total: i32 = 0
+    zr: f64 = 0.0
+    zi: f64 = 0.0
+    cr: f64 = 0.0
+    ci: f64 = 0.0
+    zr2: f64 = 0.0
+    zi2: f64 = 0.0
+    i: i32 = 0
+    for y in range(height):
+        for x in range(width):
+            zr = 0.0
+            zi = 0.0
+            cr = (x * 1.0 / width) * 3.5 - 2.5
+            ci = (y * 1.0 / height) * 2.0 - 1.0
+
+            i = 0
+            while i < max_iter:
+                zr2 = zr * zr
+                zi2 = zi * zi
+                if zr2 + zi2 > 4.0:
+                    break
+                zi = 2.0 * zr * zi + ci
+                zr = zr2 - zi2 + cr
+                i = i + 1
+
+            if i == max_iter:
+                total = total + 1
+
+    return total
+
+
+def main() -> None:
+    result: i32 = mandelbrot(670, 670, 50)
+    print(result)

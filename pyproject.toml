@@ -155,6 +155,7 @@ test-xdist = "pytest -n auto -m 'not mypy'"
 ruff-check = "ruff check ."
 ruff-format-check = "ruff format --check ."
 ruff-format = "ruff format ."
+benchmark = "python benchmarks/run_benchmarks.py"
 
 [tool.pixi.feature.docs.tasks]
 doc-build = { cmd = "mkdocs build", cwd = "docs" }

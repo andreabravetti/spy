@@ -1,0 +1,159 @@
+from unsafe import gc_alloc, gc_ptr
+
+
+@struct
+class Body:
+    x: f64
+    y: f64
+    z: f64
+    vx: f64
+    vy: f64
+    vz: f64
+    mass: f64
+
+
+SOLAR_MASS: f64 = 4.0 * 3.141592653589793 * 3.141592653589793
+DAYS_PER_YEAR: f64 = 365.24
+
+
+def advance(bodies: gc_ptr[Body], n: i32, dt: f64) -> None:
+    i: i32 = 0
+    j: i32 = 0
+    dx: f64 = 0.0
+    dy: f64 = 0.0
+    dz: f64 = 0.0
+    dist_sq: f64 = 0.0
+    mag: f64 = 0.0
+    while i < n:
+        j = i + 1
+        while j < n:
+            dx = bodies[i].x - bodies[j].x
+            dy = bodies[i].y - bodies[j].y
+            dz = bodies[i].z - bodies[j].z
+
+            dist_sq = dx * dx + dy * dy + dz * dz
+            mag = dt / dist_sq
+
+            bodies[i].vx = bodies[i].vx - dx * bodies[j].mass * mag
+            bodies[i].vy = bodies[i].vy - dy * bodies[j].mass * mag
+            bodies[i].vz = bodies[i].vz - dz * bodies[j].mass * mag
+
+            bodies[j].vx = bodies[j].vx + dx * bodies[i].mass * mag
+            bodies[j].vy = bodies[j].vy + dy * bodies[i].mass * mag
+            bodies[j].vz = bodies[j].vz + dz * bodies[i].mass * mag
+
+            j = j + 1
+        i = i + 1
+
+    i = 0
+    while i < n:
+        bodies[i].x = bodies[i].x + dt * bodies[i].vx
+        bodies[i].y = bodies[i].y + dt * bodies[i].vy
+        bodies[i].z = bodies[i].z + dt * bodies[i].vz
+        i = i + 1
+
+
+def energy(bodies: gc_ptr[Body], n: i32) -> f64:
+    e: f64 = 0.0
+    i: i32 = 0
+    j: i32 = 0
+    dx: f64 = 0.0
+    dy: f64 = 0.0
+    dz: f64 = 0.0
+    dist: f64 = 0.0
+    while i < n:
+        e = e + 0.5 * bodies[i].mass * (
+            bodies[i].vx * bodies[i].vx
+            + bodies[i].vy * bodies[i].vy
+            + bodies[i].vz * bodies[i].vz
+        )
+
+        j = i + 1
+        while j < n:
+            dx = bodies[i].x - bodies[j].x
+            dy = bodies[i].y - bodies[j].y
+            dz = bodies[i].z - bodies[j].z
+            dist = dx * dx + dy * dy + dz * dz
+
+            e = e - (bodies[i].mass * bodies[j].mass) / dist
+
+            j = j + 1
+        i = i + 1
+    return e
+
+
+def offset_momentum(bodies: gc_ptr[Body], n: i32) -> None:
+    px: f64 = 0.0
+    py: f64 = 0.0
+    pz: f64 = 0.0
+    i: i32 = 0
+    while i < n:
+        px = px + bodies[i].vx * bodies[i].mass
+        py = py + bodies[i].vy * bodies[i].mass
+        pz = pz + bodies[i].vz * bodies[i].mass
+        i = i + 1
+
+    bodies[0].vx = -px / SOLAR_MASS
+    bodies[0].vy = -py / SOLAR_MASS
+    bodies[0].vz = -pz / SOLAR_MASS
+
+
+def main() -> None:
+    N: i32 = 5
+    bodies: gc_ptr[Body] = gc_alloc[Body](N)
+
+    # sun
+    bodies[0].x = 0.0
+    bodies[0].y = 0.0
+    bodies[0].z = 0.0
+    bodies[0].vx = 0.0
+    bodies[0].vy = 0.0
+    bodies[0].vz = 0.0
+    bodies[0].mass = SOLAR_MASS
+
+    # jupiter
+    bodies[1].x = 4.84143144246472090
+    bodies[1].y = -1.16032004402742839
+    bodies[1].z = -0.103622044471123109
+    bodies[1].vx = 0.00166007664274403694 * DAYS_PER_YEAR
+    bodies[1].vy = 0.00769901118419740425 * DAYS_PER_YEAR
+    bodies[1].vz = -0.0000690460016972063023 * DAYS_PER_YEAR
+    bodies[1].mass = 0.000954791938424326609 * SOLAR_MASS
+
+    # saturn
+    bodies[2].x = 8.34336671824457987
+    bodies[2].y = 4.12479856412430479
+    bodies[2].z = -0.403523417114321381
+    bodies[2].vx = -0.00276742510726862411 * DAYS_PER_YEAR
+    bodies[2].vy = 0.00499852801234917238 * DAYS_PER_YEAR
+    bodies[2].vz = 0.0000230417297573763929 * DAYS_PER_YEAR
+    bodies[2].mass = 0.000285885980666130812 * SOLAR_MASS
+
+    # uranus
+    bodies[3].x = 12.8943695621391310
+    bodies[3].y = -15.1111514016986312
+    bodies[3].z = -0.223307578892655734
+    bodies[3].vx = 0.00296460137564761618 * DAYS_PER_YEAR
+    bodies[3].vy = 0.00237847173959480950 * DAYS_PER_YEAR
+    bodies[3].vz = -0.0000296589568540237556 * DAYS_PER_YEAR
+    bodies[3].mass = 0.0000436624404335156298 * SOLAR_MASS
+
+    # neptune
+    bodies[4].x = 15.3796971148509165
+    bodies[4].y = -25.9193146099879641
+    bodies[4].z = 0.179258772950371181
+    bodies[4].vx = 0.00268067772490389322 * DAYS_PER_YEAR
+    bodies[4].vy = 0.00162824170038242295 * DAYS_PER_YEAR
+    bodies[4].vz = -0.0000951592254519715870 * DAYS_PER_YEAR
+    bodies[4].mass = 0.0000515138902046611451 * SOLAR_MASS
+
+    offset_momentum(bodies, N)
+    e0: f64 = energy(bodies, N)
+
+    nsteps: i32 = 25000000
+    advance(bodies, N, 0.01)
+
+    e1: f64 = energy(bodies, N)
+    print(e0)
+    print("/")
+    print(e1)

@@ -1,0 +1,41 @@
+def is_safe(board: i32, row: i32, col: i32) -> bool:
+    i: i32 = 0
+    while i < col:
+        if board & (1 << i) == 0:
+            i = i + 1
+            continue
+
+        # same row
+        if i == row:
+            return False
+
+        # same diagonal
+        diag_row: i32 = 0
+        diag_row = board & (1 << i)
+        i = i + 1
+
+    return True
+
+
+# board is represented as a bitmask of placed columns
+def solve(row_mask: i32, ld_mask: i32, rd_mask: i32, n: i32) -> i32:
+    if row_mask == (1 << n) - 1:
+        return 1
+
+    count: i32 = 0
+    col: i32 = 0
+    pos: i32 = 0
+    while col < n:
+        pos = 1 << col
+        if (row_mask & pos) == 0 and (ld_mask & pos) == 0 and (rd_mask & pos) == 0:
+            new_row = row_mask | pos
+            new_ld = (ld_mask | pos) << 1
+            new_rd = (rd_mask | pos) >> 1
+            count = count + solve(new_row, new_ld, new_rd, n)
+        col = col + 1
+    return count
+
+
+def main() -> None:
+    result: i32 = solve(0, 0, 0, 12)
+    print(result)
