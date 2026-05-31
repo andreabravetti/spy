@@ -8,7 +8,7 @@ from spy.tests.support import (
     only_interp,
     skip_backends,
 )
-from spy.vm.exc import FrameInfo
+from spy.vm.exc import FrameInfo, W_Exception
 
 
 class MatchFrame:
@@ -31,6 +31,278 @@ class MatchFrame:
 
 
 class TestException(CompilerTest):
+    def test_try_except_basic(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("oops")
+                return 1
+            except ValueError:
+                return -1
+        """)
+        assert mod.foo(1) == 1
+        assert mod.foo(0) == -1
+
+    def test_try_except_type_hierarchy(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                elif x == 1:
+                    raise IndexError("i")
+                return 0
+            except ValueError:
+                return 1
+            except IndexError:
+                return 2
+        """)
+        assert mod.foo(9) == 0
+        assert mod.foo(0) == 1
+        assert mod.foo(1) == 2
+
+    def test_try_except_as(self):
+        mod = self.compile("""
+        def foo() -> i32:
+            try:
+                raise ValueError("caught me")
+            except ValueError as e:
+                if e == ValueError("caught me"):
+                    return 42
+                return -1
+        """)
+        assert mod.foo() == 42
+
+    def test_exception_message_attr(self):
+        mod = self.compile("""
+        def foo() -> str:
+            try:
+                raise ValueError("hello world")
+            except ValueError as e:
+                return e.message
+            return ""
+        """)
+        assert mod.foo() == "hello world"
+
+    def test_try_except_tuple(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                elif x == 1:
+                    raise IndexError("i")
+                return 0
+            except (ValueError, IndexError):
+                return -1
+        """)
+        assert mod.foo(9) == 0
+        assert mod.foo(0) == -1
+        assert mod.foo(1) == -1
+
+    def test_try_except_tuple_as(self):
+        mod = self.compile("""
+        def foo(x: i32) -> str:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                else:
+                    raise IndexError("i")
+            except (ValueError, IndexError) as e:
+                return e.message
+            return ""
+        """)
+        assert mod.foo(0) == "v"
+        assert mod.foo(1) == "i"
+
+    def test_try_except_unmatched_reraises(self):
+        mod = self.compile("""
+        def foo() -> i32:
+            try:
+                raise IndexError("nope")
+            except ValueError:
+                return -1
+            return 0
+        """)
+        with SPyError.raises("W_IndexError", match="nope"):
+            mod.foo()
+
+    def test_bare_raise(self):
+        mod = self.compile("""
+        def foo() -> i32:
+            try:
+                raise ValueError("original")
+            except ValueError:
+                raise
+            return 0
+        """)
+        with SPyError.raises("W_ValueError", match="original"):
+            mod.foo()
+
+    def test_bare_raise_preserves_type(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                try:
+                    if x == 0:
+                        raise ValueError("v")
+                    else:
+                        raise IndexError("i")
+                except ValueError:
+                    raise
+            except IndexError:
+                return 2
+            return 0
+        """)
+        # ValueError is re-raised by the inner handler and not caught by the
+        # outer except IndexError, so it propagates out.
+        with SPyError.raises("W_ValueError", match="v"):
+            mod.foo(0)
+        # IndexError is not caught by inner handler, goes straight to outer.
+        assert mod.foo(1) == 2
+
+    def test_try_except_else(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+            except ValueError:
+                return -1
+            else:
+                return 1
+            return 0
+        """)
+        assert mod.foo(1) == 1
+        assert mod.foo(0) == -1
+
+    def test_try_except_else_not_run_after_handler(self):
+        # The else body must NOT execute when an exception was caught.
+        # The handler here falls through (no return) to ensure the goto
+        # after the handler would reach the else label if the fix were absent.
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            result: i32 = 0
+            try:
+                if x == 0:
+                    raise ValueError("v")
+            except ValueError:
+                result = -1
+            else:
+                result = 10
+            return result
+        """)
+        assert mod.foo(1) == 10   # no exception: else runs
+        assert mod.foo(0) == -1   # exception caught: else must not run
+
+    def test_try_finally(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                return 1
+            finally:
+                return -1
+        """)
+        assert mod.foo(1) == -1
+        assert mod.foo(0) == -1
+
+    def test_try_except_finally(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            result: i32 = 0
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                result = 1
+            except ValueError:
+                result = -1
+            finally:
+                result = result * 10
+            return result
+        """)
+        assert mod.foo(1) == 10   # no exception: result=1, finally multiplies to 10
+        assert mod.foo(0) == -10  # exception caught: result=-1, finally multiplies to -10
+
+    def test_try_except_bare(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise ValueError("v")
+                elif x == 1:
+                    raise IndexError("i")
+                return 0
+            except:
+                return -1
+        """)
+        assert mod.foo(9) == 0
+        assert mod.foo(0) == -1
+        assert mod.foo(1) == -1
+
+    def test_try_except_nested(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            try:
+                try:
+                    if x == 0:
+                        raise ValueError("inner")
+                except IndexError:
+                    return -1
+            except ValueError:
+                return 1
+            return 0
+        """)
+        assert mod.foo(9) == 0   # no exception
+        assert mod.foo(0) == 1   # ValueError not caught by inner, caught by outer
+
+    def test_try_except_finally_unmatched(self):
+        # finally must run even when the exception is not caught
+        mod = self.compile("""
+        def side_effect() -> i32:
+            return 99
+
+        def foo() -> i32:
+            try:
+                raise ValueError("v")
+            except IndexError:
+                return -1
+            finally:
+                side_effect()
+            return 0
+        """)
+        with SPyError.raises("W_ValueError", match="v"):
+            mod.foo()
+
+    def test_try_finally_exception_in_finally(self):
+        mod = self.compile("""
+        def foo() -> i32:
+            try:
+                raise ValueError("original")
+            finally:
+                raise IndexError("from finally")
+            return 0
+        """)
+        with SPyError.raises("W_IndexError", match="from finally"):
+            mod.foo()
+
+    def test_try_finally_propagates_exception(self):
+        mod = self.compile("""
+        def side_effect() -> i32:
+            return 99
+
+        def foo() -> i32:
+            try:
+                raise ValueError("oops")
+            finally:
+                side_effect()
+            return 0
+        """)
+        with SPyError.raises("W_ValueError", match="oops"):
+            mod.foo()
+
     def test_raise(self):
         # for now, we don't support "except:", and raising an exception result
         # in a panic.
@@ -59,19 +331,28 @@ class TestException(CompilerTest):
             mod.foo(4)
             assert excinfo.value.w_exc.message == ""
 
-    def test_cannot_raise_red(self):
-        src = """
-        def foo() -> None:
-            var exc = Exception("hello")
+    def test_raise_red_variable(self):
+        mod = self.compile("""
+        def foo(x: i32) -> i32:
+            var exc = ValueError("oops")
             raise exc
-        """
-        errors = expect_errors(
-            "`raise` only accepts blue values for now",
-            ("this is red", "exc"),
-        )
-        self.compile_raises(src, "foo", errors)
+            return 0
+        """)
+        with SPyError.raises("W_ValueError", match="oops"):
+            mod.foo(0)
 
-    @skip_backends("C", reason="tracebacks not supported by the C backend")
+    def test_raise_red_parameter(self):
+        mod = self.compile("""
+        def bar(exc: ValueError) -> i32:
+            raise exc
+            return 0
+
+        def foo() -> i32:
+            return bar(ValueError("from bar"))
+        """)
+        with SPyError.raises("W_ValueError", match="from bar"):
+            mod.foo()
+
     def test_traceback(self):
         src = """
         def foo() -> i32:
@@ -192,3 +473,86 @@ class TestException(CompilerTest):
             assert mod.print_message(0) == 42  # works
             with SPyError.raises("W_StaticError", match="unsupported lang: it"):
                 mod.print_message(1)
+
+
+class TestCustomException(CompilerTest):
+    def test_raise_custom(self):
+        mod = self.compile("""
+        class MyError(Exception):
+            pass
+
+        def foo() -> i32:
+            raise MyError("oops")
+            return 0
+        """)
+        with SPyError.raises("MyError", match="oops"):
+            mod.foo()
+
+    def test_catch_custom(self):
+        mod = self.compile("""
+        class MyError(Exception):
+            pass
+
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise MyError("bad")
+            except MyError:
+                return 1
+            return 0
+        """)
+        assert mod.foo(1) == 0
+        assert mod.foo(0) == 1
+
+    def test_custom_inherits_from_builtin(self):
+        mod = self.compile("""
+        class MyError(ValueError):
+            pass
+
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise MyError("bad")
+            except ValueError:
+                return 1
+            return 0
+        """)
+        assert mod.foo(1) == 0
+        assert mod.foo(0) == 1  # MyError is caught by except ValueError
+
+    def test_custom_hierarchy(self):
+        mod = self.compile("""
+        class Base(Exception):
+            pass
+
+        class Child(Base):
+            pass
+
+        def foo(x: i32) -> i32:
+            try:
+                if x == 0:
+                    raise Child("child")
+                raise Base("base")
+            except Child:
+                return 2
+            except Base:
+                return 1
+            return 0
+        """)
+        assert mod.foo(1) == 1   # Base caught by except Base
+        assert mod.foo(0) == 2   # Child caught by except Child, not Base
+
+    def test_except_as_custom(self):
+        mod = self.compile("""
+        class MyError(Exception):
+            pass
+
+        def foo() -> i32:
+            try:
+                raise MyError("hello")
+            except MyError as e:
+                if e == MyError("hello"):
+                    return 1
+            return 0
+        """)
+        assert mod.foo() == 1

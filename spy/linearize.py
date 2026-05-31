@@ -292,6 +292,29 @@ class Linearizer:
         new_else = self.rewrite_body(if_node.else_body)
         return [if_node.replace(test=new_test, then_body=new_then, else_body=new_else)]
 
+    def rewrite_stmt_Try(self, try_node: ast.Try) -> list[ast.Stmt]:
+        new_body = self.rewrite_body(try_node.body)
+        new_handlers = []
+        for handler in try_node.handlers:
+            # exc_types are FQNConst (compile-time constants) after doppler — no spilling needed
+            new_body_h = self.rewrite_body(handler.body)
+            new_handlers.append(handler.replace(body=new_body_h))
+        new_orelse = self.rewrite_body(try_node.orelse)
+        new_finalbody = self.rewrite_body(try_node.finalbody)
+        return [try_node.replace(
+            body=new_body,
+            handlers=new_handlers,
+            orelse=new_orelse,
+            finalbody=new_finalbody,
+        )]
+
+    def rewrite_stmt_Raise(self, raise_node: ast.Raise) -> list[ast.Stmt]:
+        if raise_node.exc is None:
+            return [raise_node]
+        to_spill = self.mark_to_spill([raise_node.exc])
+        new_exc = self.rewrite_expr(raise_node.exc, to_spill)
+        return [raise_node.replace(exc=new_exc)]
+
     # ==== pass 1: mark ====
     #
     # Determine which expressions should be spilled to guarantee the right order of

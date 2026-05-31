@@ -39,6 +39,7 @@
 #endif
 
 #include "spy/__spy__.h"
+#include "spy/exc.h"
 #include "spy/builtins.h"
 #include "spy/complex.h"
 #include "spy/debug.h"
@@ -54,5 +55,11 @@
 #ifdef SPY_TARGET_EMSCRIPTEN
 #  include "spy/jsffi.h"
 #endif
+
+// SPY_DEFINE_RESULT instantiations for compound types that cannot be placed in
+// their own headers because those headers are included before exc.h defines
+// the macro (via the __spy__.h → str.h → complex.h transitive chain).
+SPY_DEFINE_RESULT(spy_StrObject *,  str)
+SPY_DEFINE_RESULT(spy_Complex128,   complex128)
 
 #endif /* SPY_H */

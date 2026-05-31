@@ -32,6 +32,14 @@ class SPyError(Exception):
         super().__init__(message)
 
     @classmethod
+    def from_w_exc(cls, w_exc: "W_Exception") -> "SPyError":
+        err = cls.__new__(cls)
+        err.etype = w_exc.__class__.__name__
+        err.w_exc = w_exc
+        Exception.__init__(err, w_exc.message)
+        return err
+
+    @classmethod
     def simple(cls, etype: str, primary: str, secondary: str, loc: Loc) -> "SPyError":
         err = cls(etype, primary)
         err.add("error", secondary, loc)

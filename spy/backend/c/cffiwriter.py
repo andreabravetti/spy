@@ -134,18 +134,48 @@ class CFFIWriter:
 
     def emit_func(self, ctx: Context, fqn: FQN, w_func: W_ASTFunc) -> None:
         """
-        Emit CFFI declaration for the function
+        Emit CFFI declaration for the function.
+
+        SPy functions return spy_Result_T internally (Go-style error handling),
+        but CFFI callers expect plain C return types. We generate a thin C
+        wrapper that unwraps the result and panics on error, then expose that
+        wrapper through CFFI with a plain return-type declaration.
         """
-        # fqn.c_name is something like 'spy_test$add'. The workaround is to
-        # use a different name in cdef, and a #define in src, like this:
-        #     ffibuilder.cdef("void spy_test_add(...)");
-        #     src = "#define spy_test_add spy_test$add"
+        from spy.vm.b import TYPES
+        from spy.backend.c.context import C_Function
         real_name = fqn.c_name
         cdef_name = real_name.replace("$", "_")
-        c_func = ctx.c_function(cdef_name, w_func)
-        self.tb_cdef.wl(c_func.decl() + ";")
-        self.tb_src.wl(f"#define {cdef_name} {real_name}")
+        w_restype = w_func.w_functype.w_restype
+
+        # Build C_Function with plain (non-Result) return type for cdef.
+        c_func_result = ctx.c_function(cdef_name, w_func)
+        if w_restype is TYPES.w_NoneType:
+            c_restype_plain = ctx.w2c(w_restype)  # "void"
+        else:
+            c_restype_plain = ctx.w2c(w_restype)
+        c_func_plain = C_Function(cdef_name, c_func_result.params, c_restype_plain)
+        self.tb_cdef.wl(c_func_plain.decl() + ";")
+
+        # Generate a C wrapper that calls the real function and unwraps the result.
+        param_names = ", ".join(str(p.name) for p in c_func_result.params
+                                if p.c_type.name != "void")
+        c_result_type = ctx.w2c_result(w_restype)
+        suffix = ctx.result_suffix(w_restype)
+        if w_restype is TYPES.w_NoneType:
+            self.tb_src.wb(f"""
+            void {cdef_name}({", ".join(f"{p.c_type} {p.name}" for p in c_func_result.params if p.c_type.name != "void") or "void"}) {{
+                {c_result_type} spy_r_ = {real_name}({param_names});
+                if (spy_r_.err) {{ spy_exc_print(spy_r_.err); abort(); }}
+            }}
+            """)
+        else:
+            self.tb_src.wb(f"""
+            {c_restype_plain} {cdef_name}({", ".join(f"{p.c_type} {p.name}" for p in c_func_result.params if p.c_type.name != "void") or "void"}) {{
+                {c_result_type} spy_r_ = {real_name}({param_names});
+                if (spy_r_.err) {{ spy_exc_print(spy_r_.err); abort(); }}
+                return spy_r_.value;
+            }}
+            """)
         #
-        # XXX explain
         py_name = fqn.symbol_name
         self.tb_py.wl(f"{py_name} = _{self.modname}.lib.{cdef_name}")

@@ -74,17 +74,18 @@ spy_operator$f32_to_i32(float x) {
     return (int32_t)x;
 }
 
-static inline void
+// spy_operator$raise is no longer called directly in generated C code;
+// the C backend inlines the exception construction. This stub is kept for
+// compatibility with any existing callers.
+static inline spy_Exc *
 spy_operator$raise(
     spy_StrObject *etype,
     spy_StrObject *message,
     spy_StrObject *fname,
     int32_t lineno
 ) {
-    spy_panic(
-        spy_StrObject_CHARS(etype), spy_StrObject_CHARS(message),
-        spy_StrObject_CHARS(fname), lineno
-    );
+    static const char * const chain[] = {NULL};
+    return spy_exc_new(chain, spy_StrObject_CHARS(message));
 }
 
 static inline double
